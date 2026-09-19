@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Env
+.env
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+
+# k8s local
+kubeconfig*
