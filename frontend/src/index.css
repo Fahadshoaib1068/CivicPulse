@@ -183,6 +183,66 @@ h1 {
   border: 1px solid #cfead7;
 }
 
+.status-message.error {
+  background: #fff1f2;
+  color: #a8343d;
+  border-color: #f3bcc1;
+}
+
+.filters-panel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.filters-panel label,
+.status-row label {
+  display: grid;
+  gap: 8px;
+  font-weight: 600;
+  color: #1f2e48;
+}
+
+.empty-state {
+  padding: 12px 0;
+  color: #53677d;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.status-row select {
+  min-width: 160px;
+}
+
+.status-pending {
+  color: #2b5b9c;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.complaint-id {
+  margin: 0 0 6px;
+  font-size: 0.75rem;
+  color: #5d6d86;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
 .list {
   display: grid;
   gap: 14px;

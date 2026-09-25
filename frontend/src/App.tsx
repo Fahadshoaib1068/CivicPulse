@@ -95,7 +95,7 @@ export default function App() {
         </section>
 
         {currentView === 'submit' ? <SubmitPage /> : null}
-        {currentView === 'dashboard' ? <DashboardPage complaints={sampleComplaints} /> : null}
+        {currentView === 'dashboard' ? <DashboardPage /> : null}
         {currentView === 'stats' ? <StatsPage complaints={sampleComplaints} /> : null}
 
         <Card title="Assignment note">
