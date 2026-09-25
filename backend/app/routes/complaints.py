@@ -1,8 +1,8 @@
 import uuid
-
-from fastapi import APIRouter, Depends, HTTPException, Query
+from app.services.stats_service import StatsService
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-
+from app.middleware.rate_limiter import check_rate_limit
 from app.db.session import get_db
 from app.models.enums import Category, Priority, Status
 from app.models.schemas import (
@@ -11,6 +11,7 @@ from app.models.schemas import (
     ComplaintResponse,
     StatusUpdateRequest,
 )
+from app.providers.cache.redis_cache import RedisCache
 from app.providers.triage.factory import get_triage_provider
 from app.services.complaint_service import (
     ComplaintNotFoundError,
@@ -24,20 +25,29 @@ router = APIRouter(prefix="/api/complaints", tags=["complaints"])
 
 def get_complaint_service(db: Session = Depends(get_db)) -> ComplaintService:
     provider = get_triage_provider()
-    triage_service = TriageService(provider=provider)
+    cache = RedisCache()
+    triage_service = TriageService(provider=provider, cache=cache)
     return ComplaintService(db=db, triage_service=triage_service)
 
 
 @router.post("", response_model=ComplaintResponse, status_code=201)
 def create_complaint(
+    request: Request,
     payload: ComplaintCreateRequest,
+    db: Session = Depends(get_db),
     service: ComplaintService = Depends(get_complaint_service),
 ):
+    cache = RedisCache()
+    check_rate_limit(request, cache)
+
     complaint = service.submit_complaint(
         text=payload.text,
         location=payload.location,
         reporter_contact=payload.reporter_contact,
     )
+
+    StatsService(db=db, cache=cache).invalidate()
+
     return complaint
 
 
