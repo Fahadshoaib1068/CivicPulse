@@ -1,3 +1,4 @@
+import { getApiBaseUrl } from '../config';
 import type { Category, Complaint, Priority, Status } from '../types/complaints';
 
 export type ComplaintListFilters = {
@@ -40,6 +41,48 @@ export type ComplaintSubmissionResult = {
   aiSummary: string;
   triageProvider: string;
 };
+
+export type ComplaintStatsResponse = {
+  by_category: Partial<Record<Category, number>>;
+  by_priority: Partial<Record<Priority, number>>;
+};
+
+export type ComplaintStatsResult = ComplaintStatsResponse & {
+  cacheStatus: 'HIT' | 'MISS';
+};
+
+export async function getComplaintStats(): Promise<ComplaintStatsResult> {
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/stats`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new ApiError(
+      response.status,
+      detail || 'Unable to load complaint statistics.'
+    );
+  }
+
+  const payload = (await response.json()) as Partial<ComplaintStatsResponse>;
+
+  if (!payload.by_category || !payload.by_priority) {
+    throw new ApiError(502, 'Complaint statistics response was missing the expected payload.');
+  }
+
+  const cacheHeader = response.headers.get('X-Cache');
+  const cacheStatus = cacheHeader && cacheHeader.toUpperCase() === 'HIT' ? 'HIT' : 'MISS';
+
+  return {
+    by_category: payload.by_category,
+    by_priority: payload.by_priority,
+    cacheStatus,
+  };
+}
 
 export async function submitComplaint(
   payload: ComplaintSubmissionRequest
