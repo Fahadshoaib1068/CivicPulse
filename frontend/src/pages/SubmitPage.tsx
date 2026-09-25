@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Card } from '../components/ui';
-import { submitComplaint } from '../api';
+import { submitComplaint, type ComplaintSubmissionResult } from '../api';
 import type { Category, Priority } from '../types/complaints';
 
 const categoryOptions: Category[] = [
@@ -22,13 +22,7 @@ export function SubmitPage() {
   const [priority, setPriority] = useState<Priority>('high');
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
-  const [result, setResult] = useState<{
-    complaintId: string;
-    category: Category;
-    priority: Priority;
-    aiSummary: string;
-    triageProvider: string;
-  } | null>(null);
+  const [result, setResult] = useState<ComplaintSubmissionResult | null>(null);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -63,8 +57,6 @@ export function SubmitPage() {
         text: trimmedText,
         location: trimmedLocation,
         reporter_contact: reporterContact.trim() || null,
-        category,
-        priority,
       });
 
       setResult(data);

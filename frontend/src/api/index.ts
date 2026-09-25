@@ -30,15 +30,11 @@ export type ComplaintSubmissionRequest = {
   text: string;
   location: string;
   reporter_contact?: string | null;
-  category: Category;
-  priority: Priority;
 };
 
-export type ComplaintSubmissionResult = {
+export type ComplaintSubmissionResult = Complaint & {
   complaintId: string;
-  category: Category;
-  priority: Priority;
-  aiSummary: string;
+  aiSummary: string | null;
   triageProvider: string;
 };
 
@@ -50,6 +46,34 @@ export type ComplaintStatsResponse = {
 export type ComplaintStatsResult = ComplaintStatsResponse & {
   cacheStatus: 'HIT' | 'MISS';
 };
+
+function mapComplaint(raw: any): Complaint {
+  return {
+    id: raw.id,
+    text: raw.text ?? '',
+    location: raw.location ?? '',
+    reporter_contact: raw.reporter_contact ?? null,
+    category: raw.category,
+    priority: raw.priority,
+    status: raw.status,
+    ai_summary: raw.ai_summary ?? null,
+    triaged_by: raw.triaged_by ?? 'unknown',
+    triage_latency_ms: raw.triage_latency_ms ?? 0,
+    created_at: raw.created_at,
+    updated_at: raw.updated_at ?? null,
+  };
+}
+
+function mapSubmissionResult(raw: any): ComplaintSubmissionResult {
+  const complaint = mapComplaint(raw);
+
+  return {
+    ...complaint,
+    complaintId: complaint.id,
+    aiSummary: complaint.ai_summary ?? '',
+    triageProvider: complaint.triaged_by,
+  };
+}
 
 export async function getComplaintStats(): Promise<ComplaintStatsResult> {
   const baseUrl = getApiBaseUrl();
@@ -98,16 +122,30 @@ export async function submitComplaint(
     throw new Error('Location must be between 3 and 200 characters.');
   }
 
-  await Promise.resolve();
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/complaints`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({
+      text: trimmedText,
+      location: trimmedLocation,
+      reporter_contact: payload.reporter_contact?.trim() || null,
+    }),
+  });
 
-  return {
-    complaintId: `CIV-${Math.random().toString(36).slice(2, 9).toUpperCase()}`,
-    category: payload.category,
-    priority: payload.priority,
-    aiSummary:
-      trimmedText.length > 120 ? `${trimmedText.slice(0, 117).trim()}...` : trimmedText,
-    triageProvider: 'local-frontend-preview',
-  };
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new ApiError(
+      response.status,
+      detail || 'Unable to submit complaint.'
+    );
+  }
+
+  const data = (await response.json()) as any;
+  return mapSubmissionResult(data);
 }
 
 export async function listComplaints(
@@ -116,20 +154,76 @@ export async function listComplaints(
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 10;
 
-  await Promise.resolve();
-  throw new ApiError(
-    501,
-    'CivicPulse backend HTTP routes are not implemented yet. The dashboard will connect once the API is available.'
-  );
+  const params = new URLSearchParams({
+    page: String(page),
+    page_size: String(pageSize),
+  });
+
+  if (filters.category && filters.category !== 'all') {
+    params.set('category', filters.category);
+  }
+
+  if (filters.priority && filters.priority !== 'all') {
+    params.set('priority', filters.priority);
+  }
+
+  if (filters.status && filters.status !== 'all') {
+    params.set('status', filters.status);
+  }
+
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/complaints?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new ApiError(
+      response.status,
+      detail || 'Unable to load complaints.'
+    );
+  }
+
+  const payload = (await response.json()) as {
+    items: any[];
+    total: number;
+    page: number;
+    page_size: number;
+  };
+
+  return {
+    items: payload.items.map(mapComplaint),
+    total: payload.total,
+    page: payload.page,
+    pageSize: payload.page_size,
+  };
 }
 
 export async function updateComplaintStatus(
   complaintId: string,
   status: Status
 ): Promise<Complaint> {
-  await Promise.resolve();
-  throw new ApiError(
-    501,
-    'CivicPulse backend HTTP routes are not implemented yet. Status updates will connect once the API is available.'
-  );
+  const baseUrl = getApiBaseUrl();
+  const response = await fetch(`${baseUrl}/api/complaints/${complaintId}/status`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ status }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new ApiError(
+      response.status,
+      detail || 'Unable to update complaint status.'
+    );
+  }
+
+  const payload = (await response.json()) as any;
+  return mapComplaint(payload);
 }
