@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button, Card } from '../components/ui';
+import { submitComplaint } from '../api';
 import type { Category, Priority } from '../types/complaints';
 
 const categoryOptions: Category[] = [
@@ -17,14 +18,81 @@ export function SubmitPage() {
   const [text, setText] = useState('');
   const [location, setLocation] = useState('');
   const [reporterContact, setReporterContact] = useState('');
-  const [category, setCategory] = useState<Category>('other');
-  const [priority, setPriority] = useState<Priority>('normal');
-  const [submitted, setSubmitted] = useState(false);
+  const [category, setCategory] = useState<Category>('water');
+  const [priority, setPriority] = useState<Priority>('high');
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [result, setResult] = useState<{
+    complaintId: string;
+    category: Category;
+    priority: Priority;
+    aiSummary: string;
+    triageProvider: string;
+  } | null>(null);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSubmitted(true);
+
+    if (submitting) {
+      return;
+    }
+
+    const trimmedText = text.trim();
+    const trimmedLocation = location.trim();
+    const nextErrors: string[] = [];
+
+    if (trimmedText.length < 10 || trimmedText.length > 2000) {
+      nextErrors.push('Complaint text must be between 10 and 2000 characters.');
+    }
+
+    if (trimmedLocation.length < 3 || trimmedLocation.length > 200) {
+      nextErrors.push('Location must be between 3 and 200 characters.');
+    }
+
+    if (nextErrors.length > 0) {
+      setErrors(nextErrors);
+      setResult(null);
+      return;
+    }
+
+    setErrors([]);
+    setSubmitting(true);
+
+    try {
+      const data = await submitComplaint({
+        text: trimmedText,
+        location: trimmedLocation,
+        reporter_contact: reporterContact.trim() || null,
+        category,
+        priority,
+      });
+
+      setResult(data);
+    } catch (submitError) {
+      setResult(null);
+      setErrors([
+        submitError instanceof Error ? submitError.message : 'Unable to submit complaint.',
+      ]);
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  if (result) {
+    return (
+      <Card title="Submit a complaint">
+        <div className="status-message success" aria-live="polite">
+          <p>
+            <strong>Complaint ID:</strong> {result.complaintId}
+          </p>
+          <p>{result.category}</p>
+          <p>{result.priority}</p>
+          <p>{result.aiSummary}</p>
+          <p>{result.triageProvider}</p>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card title="Submit a complaint">
@@ -84,15 +152,18 @@ export function SubmitPage() {
         </div>
 
         <div className="form-actions">
-          <Button type="submit">Submit complaint</Button>
+          <Button type="submit" disabled={submitting}>
+            {submitting ? 'Submitting...' : 'Submit complaint'}
+          </Button>
         </div>
 
-        {submitted ? (
-          <p className="status-message">
-            Complaint draft prepared. Backend submission route will be connected when the REST API is
-            implemented.
-          </p>
-        ) : null}
+        {errors.length > 0
+          ? errors.map((message) => (
+              <p key={message} className="status-message error" role="alert">
+                {message}
+              </p>
+            ))
+          : null}
       </form>
     </Card>
   );
