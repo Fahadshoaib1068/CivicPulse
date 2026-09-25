@@ -15,6 +15,10 @@ class InvalidTransitionError(Exception):
         super().__init__(f"Cannot transition from {from_status.value} to {to_status.value}")
 
 
+class ComplaintNotFoundError(Exception):
+    pass
+
+
 VALID_TRANSITIONS: dict[Status, set[Status]] = {
     Status.OPEN: {Status.IN_PROGRESS, Status.REJECTED},
     Status.IN_PROGRESS: {Status.RESOLVED, Status.REJECTED},
@@ -53,7 +57,7 @@ class ComplaintService:
     def transition_status(self, complaint_id: uuid.UUID, new_status: Status) -> Complaint:
         complaint = self.repo.get_by_id(complaint_id)
         if complaint is None:
-            raise ValueError("Complaint not found")
+            raise ComplaintNotFoundError(f"Complaint {complaint_id} not found")
 
         current_status = complaint.status
         allowed = VALID_TRANSITIONS.get(current_status, set())

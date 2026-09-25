@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import MagicMock
 
-from app.services.complaint_service import ComplaintService, InvalidTransitionError
+from app.services.complaint_service import (
+    ComplaintNotFoundError,
+    ComplaintService,
+    InvalidTransitionError,
+)
 from app.models.enums import Status
 
 
@@ -63,9 +67,9 @@ def test_in_progress_to_rejected_is_valid():
     service.repo.update_status.assert_called_once_with("fake-id", Status.REJECTED)
 
 
-def test_nonexistent_complaint_raises_value_error():
+def test_nonexistent_complaint_raises_not_found_error():
     service = _make_service_with_fake_repo()
     service.repo.get_by_id.return_value = None
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ComplaintNotFoundError):
         service.transition_status(complaint_id="fake-id", new_status=Status.RESOLVED)
