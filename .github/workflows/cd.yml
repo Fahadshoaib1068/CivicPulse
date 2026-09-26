@@ -1,0 +1,52 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DB: civicpulse
+      DATABASE_URL: postgresql+psycopg2://postgres:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/civicpulse
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_PROVIDER: rules
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:8000' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: docker compose -f compose.yaml -f compose.prod.yaml config
+
+      - name: Build and deploy stack
+        run: docker compose -f compose.yaml -f compose.prod.yaml up -d --build --remove-orphans
+
+      - name: Wait for stack health
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'backend healthy' && \
+               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'postgres healthy' && \
+               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'redis healthy'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Deployment stack did not become healthy in time"
+          docker compose ps
+          exit 1
+
+      - name: Smoke test backend
+        run: curl -fsS http://localhost:8000/ready
+
+      - name: Smoke test frontend
+        run: curl -fsS http://localhost:5173
