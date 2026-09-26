@@ -5,8 +5,10 @@ import random
 import time
 from typing import Optional, Protocol
 
+from app.routes.metrics import TRIAGE_LATENCY, TRIAGE_FALLBACK_COUNT
 from app.providers.triage.base import TriageProvider, TriageResult
 from app.providers.triage.rules import RuleBasedTriage
+from app.services.triage_history import record_outcome
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,10 @@ class TriageService:
             triaged_by = "rules:fallback"
 
         latency_ms = int((time.monotonic() - start) * 1000)
+        record_outcome(triaged_by, latency_ms, triaged_by == "rules:fallback")
+        TRIAGE_LATENCY.labels(triaged_by).observe(latency_ms / 1000)
+        if triaged_by == "rules:fallback":
+            TRIAGE_FALLBACK_COUNT.inc()
 
         if self.cache is not None:
             self.cache.setex(

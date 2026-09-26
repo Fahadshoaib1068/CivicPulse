@@ -2,15 +2,16 @@ import contextvars
 import json
 import logging
 import logging.config
-import signal
-import threading
 import time
 import uuid
-
+from app.routes.metrics import REQUEST_COUNT, REQUEST_LATENCY
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
-from app.routes import complaints, health, meta, stats
+from app.db.session import engine
+from app.routes import complaints, health, meta, metrics, stats
+
 
 _request_id_var = contextvars.ContextVar("request_id", default=None)
 
@@ -64,17 +65,17 @@ logging.config.dictConfig(
 
 logger = logging.getLogger("civicpulse")
 
-_shutdown_requested = threading.Event()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("application startup")
+    yield
+    logger.warning("application shutdown started; draining connections")
+    engine.dispose()
+    logger.info("database connection pool closed")
 
 
-def _handle_sigterm(signum, frame):
-    logger.warning("SIGTERM received; initiating graceful shutdown", extra={"signal": signum})
-    _shutdown_requested.set()
-
-
-signal.signal(signal.SIGTERM, _handle_sigterm)
-
-app = FastAPI(title="CivicPulse")
+app = FastAPI(title="CivicPulse", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -109,6 +110,8 @@ async def request_logging_middleware(request: Request, call_next):
             },
         )
         response.headers["X-Request-ID"] = request_id
+        REQUEST_COUNT.labels(request.method, request.url.path, status_code).inc()
+        REQUEST_LATENCY.labels(request.method, request.url.path).observe(duration_ms / 1000)
         return response
     finally:
         _request_id_var.reset(token)
@@ -124,12 +127,8 @@ app.add_middleware(
 )
 
 
-@app.on_event("shutdown")
-def graceful_shutdown():
-    logger.warning("application shutdown started")
-
-
 app.include_router(complaints.router)
 app.include_router(health.router)
 app.include_router(stats.router)
 app.include_router(meta.router)
+app.include_router(metrics.router)
