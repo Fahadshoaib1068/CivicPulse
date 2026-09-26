@@ -2,6 +2,8 @@ import os
 
 from fastapi import APIRouter
 
+from app.services.triage_history import get_recent_outcomes
+
 router = APIRouter(prefix="/api/meta", tags=["meta"])
 
 
@@ -12,4 +14,5 @@ def get_providers():
     return {
         "providers": supported,
         "current": current,
+        "recent_outcomes": get_recent_outcomes(),
     }
