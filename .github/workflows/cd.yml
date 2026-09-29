@@ -100,7 +100,7 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}-backend:${{ github.sha }}
+          tags: ghcr.io/fahadshoaib1068/civicpulse-backend:${{ github.sha }}
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -108,8 +108,7 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}-frontend:${{ github.sha }}
-
+          tags: ghcr.io/fahadshoaib1068/civicpulse-frontend:${{ github.sha }}
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 20
