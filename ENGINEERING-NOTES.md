@@ -1,82 +1,369 @@
-# Engineering Notes
+# CivicPulse Engineering Notes
 
-These notes capture the engineering posture of the current branch of CivicPulse and should be treated as the live source-of-truth documentation for this repository state.
+## 1. Project Overview
 
-## Current system model
+CivicPulse is a civic complaint intake and AI-assisted triage platform.
 
-The repository contains:
+The system consists of:
 
-- A Python/FastAPI backend in `backend/`
-- A TypeScript/Vite frontend in `frontend/`
-- PostgreSQL and Redis services managed by Docker Compose
-- GitHub Actions deployment automation in `.github/workflows/cd.yml`
+```text
+React + TypeScript frontend
+            |
+            v
+       FastAPI backend
+            |
+      +-----+-----+
+      |           |
+      v           v
+ PostgreSQL     Redis
+      |
+      v
+Complaint / triage data
+```
 
-This branch does not include any Kubernetes manifests or Kubernetes deployment logic as implemented code. Any future Kubernetes work must be merged before it is treated as part of the repository's executed deployment model.
+The backend also communicates with replaceable triage providers.
 
-## Backend architecture
+## 2. Triage Architecture
 
-The backend is organized around a few core responsibilities:
+The triage system is based on a provider abstraction.
 
-- request handling and routing
-- complaint persistence and retrieval
-- analytics/statistics generation
-- triage provider selection and fallback logic
-- caching for repeated triage requests
+The core provider contract is defined through the `TriageProvider` interface/protocol.
 
-The API entrypoint is `backend/app/main.py`, and settings are loaded from `backend/app/config.py`.
+Current provider implementations include:
 
-## Triage provider abstraction
+* Rule-based triage
+* Simulated triage
+* LLM-based triage
 
-The provider abstraction is intentionally narrow to keep the service swappable without changing the rest of the app.
+The service layer does not need to depend directly on a specific provider implementation.
 
-The contract is defined in `backend/app/providers/triage/base.py`:
+This allows providers to be replaced without changing the complaint API.
 
-- `TriageProvider` is a protocol
-- each provider exposes a `name` string
-- `triage(text: str, location: str) -> TriageResult` is the required method
+## 3. Fallback and Reliability
 
-The runtime provider is selected by `backend/app/providers/triage/factory.py` from the `TRIAGE_PROVIDER` environment variable. Supported values in this branch include:
+The triage service supports retry and fallback behavior.
 
-- `rules`
-- `simulated`
-- `llm`
-- `ollama`
+If the preferred provider cannot successfully complete a request, the service can fall back to another available provider.
 
-The service layer in `backend/app/services/triage_service.py` wraps the selected provider and applies a fallback rule engine when the current provider fails.
+This prevents the complaint submission path from depending entirely on one AI provider.
 
-## Frontend configuration model
+## 4. Triage Caching
 
-The frontend is designed to resolve its API base URL at runtime instead of hard-coding a single environment.
+Redis is used to cache triage results.
 
-The runtime logic in `frontend/src/config.ts` resolves this order:
+Caching reduces repeated processing for equivalent complaint content and reduces unnecessary calls to external AI providers.
 
-1. `window.CIVICPULSE_CONFIG.apiBaseUrl`
-2. `VITE_API_BASE_URL`
-3. the browser origin as a default
+The cache layer is integrated with the triage service rather than being exposed directly to the frontend.
 
-The static runtime config is written by `frontend/entrypoint.sh` into `/config.js`, which is loaded by `frontend/index.html` before the application bootstraps.
+## 5. Complaint Processing
 
-This pattern allows the same frontend bundle to be reused across local, staging, and production environments without rebuilding code for each deployment target.
+The complaint flow is approximately:
 
-## Deployment model
+```text
+Citizen
+   |
+   v
+Frontend
+   |
+   v
+Complaint API
+   |
+   v
+Complaint Service
+   |
+   v
+Triage Service
+   |
+   +-------------------+
+   |                   |
+   v                   v
+Redis Cache       Triage Provider
+                       |
+               +-------+-------+
+               |       |       |
+               v       v       v
+             Rules  Simulated  LLM
+   |
+   v
+PostgreSQL
+```
 
-The repository's checked-in deployment path is not Kubernetes-based. Instead, the deployment workflow in `.github/workflows/cd.yml` performs the following:
+## 6. Database
 
-- checks out the repository
-- validates the Docker Compose configuration
-- runs `docker compose -f compose.yaml -f compose.prod.yaml up -d --build --remove-orphans`
-- waits for service health checks
-- performs smoke tests on the backend and frontend
+PostgreSQL is the primary persistent database.
 
-This means the current branch's operational model is a direct Docker Compose deployment that is triggered from GitHub Actions on `main`.
+SQLAlchemy is used for database interaction and Alembic manages schema migrations.
 
-## Design constraints and guardrails
+Database schema changes should be introduced through Alembic migrations rather than manual production database changes.
 
-- Configuration should remain explicit and inspectable via environment variables.
-- Triage provider logic should remain interchangeable through the protocol-based interface.
-- The frontend build should be environment-agnostic and allow runtime overrides.
-- Any future deployment strategy that introduces immutable artifacts or SHA-based release promotion should be captured in a dedicated ADR.
+## 7. Redis
 
-## Notes for future work
+Redis provides application-level infrastructure for:
 
-If the project evolves to a production deployment strategy with image pinning or release-by-commit, the decision should be recorded in a new ADR rather than assumed from the current branch state.
+* Triage caching
+* Cache-backed functionality
+* Distributed rate limiting
+
+Redis is deployed as a separate service in Docker Compose and Kubernetes.
+
+## 8. Rate Limiting
+
+Complaint-related endpoints use distributed rate limiting backed by Redis.
+
+This allows rate-limit state to be shared across multiple backend instances rather than being stored only in the memory of a single process.
+
+## 9. Observability
+
+The backend includes structured logging and request-level observability.
+
+Important information includes:
+
+* Timestamp
+* Log level
+* Logger
+* Request ID
+* HTTP method
+* Request path
+* Status code
+* Request latency
+
+The application also provides:
+
+```text
+/health
+/ready
+/metrics
+```
+
+Graceful shutdown is implemented through the application lifespan mechanism.
+
+## 10. Frontend Runtime Configuration
+
+The frontend does not hard-code a single backend deployment location into the application logic.
+
+Runtime/API configuration is documented through:
+
+```text
+docs/adr/ADR-003-frontend-runtime-config.md
+```
+
+This allows the same frontend codebase to be used in different environments.
+
+## 11. Docker Architecture
+
+The Docker Compose architecture contains:
+
+```text
+                 Edge Network
+                     |
+          +----------+----------+
+          |                     |
+      Frontend               Backend
+                                |
+                         Internal Network
+                           /          \
+                          /            \
+                    PostgreSQL        Redis
+```
+
+The Compose configuration separates the edge-facing services from internal infrastructure services.
+
+PostgreSQL and Redis are not unnecessarily exposed directly to the host through the application architecture.
+
+## 12. Kubernetes Architecture
+
+Kubernetes manifests are stored under:
+
+```text
+k8s/
+```
+
+The current Kubernetes configuration includes:
+
+* Namespace
+* Backend Deployment
+* Frontend Deployment
+* PostgreSQL
+* Redis
+* ConfigMap
+* Secrets
+* Ingress
+* PodDisruptionBudget
+* Horizontal Pod Autoscaler
+* Vertical Pod Autoscaler
+
+The backend HPA provides horizontal scaling based on resource utilization.
+
+The VPA configuration provides resource recommendation/configuration for the backend.
+
+## 13. Autoscaling Evidence
+
+The repository includes k6 load-testing material:
+
+```text
+load/k6-hpa-test.js
+```
+
+Recorded evidence is stored under:
+
+```text
+evidence/
+```
+
+including:
+
+```text
+hpa-samples.csv
+k6-metrics.json
+hpa-replicas-vs-load.png
+```
+
+These artifacts document the load-testing/HPA work performed for the project.
+
+## 14. Container Images
+
+The project produces separate backend and frontend container images.
+
+The CI/CD workflow publishes SHA-tagged images to GitHub Container Registry.
+
+Using the commit SHA as the image tag provides an immutable reference to the exact source revision used to build an image.
+
+The related architectural decision is documented in:
+
+```text
+docs/adr/ADR-004-deploy-by-sha.md
+```
+
+## 15. CI/CD
+
+GitHub Actions workflows are located under:
+
+```text
+.github/workflows/
+```
+
+The CI workflow performs backend and frontend validation.
+
+The container publishing workflow builds and publishes container images to GHCR.
+
+The repository also contains Docker Compose deployment automation.
+
+Kubernetes deployment manifests are maintained under:
+
+```text
+k8s/
+```
+
+The Compose deployment path and Kubernetes configuration should be considered separate operational paths.
+
+## 16. Architecture Decisions
+
+Current ADRs:
+
+```text
+docs/adr/
+├── ADR-001-pii-data-governance.md
+├── ADR-002-provider-interface.md
+├── ADR-003-frontend-runtime-config.md
+└── ADR-004-deploy-by-sha.md
+```
+
+These documents record important architectural decisions instead of relying only on implementation code.
+
+## 17. Testing
+
+Backend tests are divided into:
+
+```text
+backend/tests/unit/
+backend/tests/integration/
+```
+
+The CI pipeline runs the backend test suite.
+
+Frontend tests are also executed through the frontend CI workflow.
+
+## 18. Development Workflow
+
+Feature work is developed using branches and Pull Requests.
+
+The expected workflow is:
+
+```text
+Issue
+  |
+  v
+Feature branch
+  |
+  v
+Implementation
+  |
+  v
+Tests
+  |
+  v
+Pull Request
+  |
+  v
+Review
+  |
+  v
+Merge
+```
+
+This keeps implementation changes traceable to project tasks.
+
+## 19. Documentation
+
+Operational information is maintained in:
+
+```text
+README.md
+RUNBOOK.md
+ENGINEERING-NOTES.md
+docs/adr/
+```
+
+The README provides project-level information.
+
+The RUNBOOK provides operational procedures.
+
+ENGINEERING-NOTES documents important implementation and architecture decisions.
+
+ADRs record significant architectural decisions and their rationale.
+
+## 20. Current Deployment Model
+
+CivicPulse currently maintains both:
+
+### Docker Compose
+
+Used for local and Compose-based deployment.
+
+```text
+Docker Compose
+├── frontend
+├── backend
+├── postgres
+└── redis
+```
+
+### Kubernetes
+
+The repository contains Kubernetes manifests for:
+
+```text
+Kubernetes
+├── frontend
+├── backend
+├── postgres
+├── redis
+├── ingress
+├── HPA
+├── VPA
+└── PDB
+```
+
+The Kubernetes manifests, GHCR image publishing, and Compose deployment workflow are maintained as separate infrastructure concerns.
+
+Production deployment should use the deployment path explicitly configured for the target environment rather than assuming that the presence of Kubernetes manifests means that the Compose deployment workflow has been replaced.
