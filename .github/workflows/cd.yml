@@ -139,6 +139,50 @@ jobs:
           docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" ps
           exit 1
 
+      - name: Diagnose deployment failure
+        if: failure()
+        run: |
+          compose_args=(-f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml")
+
+          echo "=== Compose service status ==="
+          docker compose "${compose_args[@]}" ps -a || true
+
+          backend_id=$(docker compose "${compose_args[@]}" ps -aq backend || true)
+          if [ -n "$backend_id" ]; then
+            echo "=== Backend health status and healthcheck log ==="
+            docker inspect "$backend_id" --format '{{json .State.Health}}' || true
+            echo "=== Backend logs ==="
+            docker compose "${compose_args[@]}" logs --no-color --tail=200 backend || true
+            echo "=== Backend PostgreSQL hostname resolution ==="
+            docker compose "${compose_args[@]}" exec -T backend python -c "import socket; print(socket.gethostbyname('postgres'))" || true
+            echo "=== Backend direct PostgreSQL connection probe ==="
+            docker compose "${compose_args[@]}" exec -T backend python -c "from sqlalchemy import text; from app.db.session import engine; connection=engine.connect(); connection.execute(text('SELECT 1')); connection.close(); print('DATABASE_PROBE=OK')" || true
+            echo "=== Backend non-secret database environment ==="
+            docker inspect "$backend_id" --format '{{range .Config.Env}}{{println .}}{{end}}' |
+              sed -E 's#(DATABASE_URL=postgresql\+psycopg2://[^:]+:)[^@]+@#\1[REDACTED]@#' |
+              grep -E '^(DATABASE_URL|REDIS_URL|TRIAGE_PROVIDER)=' || true
+          fi
+
+          postgres_id=$(docker compose "${compose_args[@]}" ps -aq postgres || true)
+          if [ -n "$postgres_id" ]; then
+            echo "=== PostgreSQL status and healthcheck log ==="
+            docker inspect "$postgres_id" --format '{{json .State.Health}}' || true
+            echo "=== PostgreSQL logs ==="
+            docker compose "${compose_args[@]}" logs --no-color --tail=200 postgres || true
+            echo "=== PostgreSQL non-secret environment ==="
+            docker inspect "$postgres_id" --format '{{range .Config.Env}}{{println .}}{{end}}' |
+              grep -E '^(POSTGRES_USER|POSTGRES_DB)=' || true
+          fi
+
+          echo "=== Effective Compose configuration (secrets redacted) ==="
+          if docker compose "${compose_args[@]}" config > "$RUNNER_TEMP/compose-effective.yaml"; then
+            sed -E \
+              -e 's#(POSTGRES_PASSWORD: ).*#\1[REDACTED]#' \
+              -e 's#(GROQ_API_KEY: ).*#\1[REDACTED]#' \
+              -e 's#(DATABASE_URL: postgresql\+psycopg2://[^:]+:)[^@]+@#\1[REDACTED]@#' \
+              "$RUNNER_TEMP/compose-effective.yaml"
+          fi
+
       - name: Smoke test backend
         run: docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://backend:8000/ready').read()"
 
