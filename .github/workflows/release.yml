@@ -1,4 +1,3 @@
-```yaml
 name: Release
 
 on:
@@ -283,4 +282,3 @@ jobs:
       - name: Smoke test frontend
         run: |
           curl -fsS http://localhost:80
-```
