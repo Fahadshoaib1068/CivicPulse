@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
         redis==8.1.0 \
         alembic==1.20.0 \
         groq==1.7.0 \
-        python-dotenv==1.2.3
+        python-dotenv==1.2.3 \
+        prometheus-client==0.20.0
 
 EXPOSE 8000
 
