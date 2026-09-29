@@ -1,114 +1,423 @@
-# Runbook
+# CivicPulse Runbook
 
-This runbook covers the operational procedures for the current branch of CivicPulse as implemented in this repository. It is intentionally limited to the Docker Compose deployment model and local service operations present in the checked-in source.
+This runbook describes the operational procedures for running and troubleshooting CivicPulse.
 
-## Scope
+## 1. Local Docker Compose Deployment
 
-- FastAPI backend at `http://localhost:8000`
-- React/Vite frontend at `http://localhost:5173`
-- PostgreSQL at the service name `postgres`
-- Redis at the service name `redis`
-- Deployment automation via GitHub Actions in `.github/workflows/cd.yml`
+The primary local deployment method is Docker Compose.
 
-## Start and stop
+From the repository root:
 
-### Start services
-
-```bash
-docker compose up -d --build
+```powershell
+docker compose up --build
 ```
 
-### Stop services
+Check running services:
 
-```bash
-docker compose down
+```powershell
+docker compose ps
 ```
 
-### Rebuild one service
+View logs:
 
-```bash
-docker compose up -d --build backend
+```powershell
+docker compose logs
 ```
 
-## Health checks
+View backend logs:
+
+```powershell
+docker compose logs backend
+```
+
+View frontend logs:
+
+```powershell
+docker compose logs frontend
+```
+
+View PostgreSQL logs:
+
+```powershell
+docker compose logs postgres
+```
+
+View Redis logs:
+
+```powershell
+docker compose logs redis
+```
+
+## 2. Service Health
 
 ### Backend
 
-```bash
-curl -fsS http://localhost:8000/ready
+Health:
+
+```text
+http://localhost:8000/health
+```
+
+Readiness:
+
+```text
+http://localhost:8000/ready
+```
+
+API documentation:
+
+```text
+http://localhost:8000/docs
+```
+
+Metrics:
+
+```text
+http://localhost:8000/metrics
 ```
 
 ### Frontend
 
-```bash
-curl -fsS http://localhost:5173
+```text
+http://localhost:5173
 ```
 
-### Container status
+When running through the production Compose configuration, the frontend is exposed through the configured production port.
 
-```bash
-docker compose ps
+## 3. Database
+
+PostgreSQL is provided as a Compose service.
+
+Check:
+
+```powershell
+docker compose ps postgres
 ```
 
-### Logs
+Inspect database logs:
 
-```bash
-docker compose logs -f backend
-docker compose logs -f postgres
-docker compose logs -f redis
+```powershell
+docker compose logs postgres
 ```
 
-## Configuration notes
+Database migrations are managed through Alembic.
 
-The backend reads environment configuration from the runtime environment and defaults are defined in `backend/app/config.py`.
+Typical migration command from the backend environment:
 
-Key values:
-
-- `DATABASE_URL`
-- `REDIS_URL`
-- `TRIAGE_PROVIDER`
-- `GROQ_API_KEY`
-
-The frontend resolves its API base URL in this order:
-
-1. `window.CIVICPULSE_CONFIG.apiBaseUrl`
-2. `VITE_API_BASE_URL`
-3. The browser origin
-
-This is implemented in `frontend/src/config.ts` and is reflected in `frontend/entrypoint.sh` for runtime config injection.
-
-## Common issues
-
-### Backend health check fails
-
-1. Confirm containers are running with `docker compose ps`.
-2. Inspect backend logs: `docker compose logs -f backend`.
-3. Verify the database is healthy and reachable through `DATABASE_URL`.
-4. Verify Redis is healthy and reachable through `REDIS_URL`.
-
-### Frontend loads but API calls fail
-
-1. Check whether the frontend has a runtime config override in `/config.js`.
-2. Confirm the backend is up on port 8000.
-3. Review `VITE_API_BASE_URL` and `window.CIVICPULSE_CONFIG.apiBaseUrl` values.
-
-### Triage provider errors
-
-1. Confirm `TRIAGE_PROVIDER` is one of the supported names in `backend/app/providers/triage/factory.py`.
-2. Check backend logs for provider or fallback activation.
-3. If using the LLM provider, confirm `GROQ_API_KEY` is present.
-
-## Recovery
-
-When the current deployment is unstable:
-
-```bash
-docker compose down --remove-orphans
-docker compose up -d --build --remove-orphans
+```powershell
+alembic upgrade head
 ```
 
-This rebuilds the stack without altering the repository structure.
+## 4. Redis
 
-## Deployment workflow
+Redis provides caching and distributed rate-limiting support.
 
-The current branch uses GitHub Actions from `.github/workflows/cd.yml` to validate the Compose configuration and then run the stack with Docker Compose. The flow is a direct application deployment pattern, not a Kubernetes rollout. No Kubernetes implementation is considered present in this branch's source of truth.
+Check:
+
+```powershell
+docker compose ps redis
+```
+
+Inspect logs:
+
+```powershell
+docker compose logs redis
+```
+
+## 5. Restarting Services
+
+Restart the complete Compose stack:
+
+```powershell
+docker compose restart
+```
+
+Restart only the backend:
+
+```powershell
+docker compose restart backend
+```
+
+Restart only Redis:
+
+```powershell
+docker compose restart redis
+```
+
+Restart only PostgreSQL:
+
+```powershell
+docker compose restart postgres
+```
+
+## 6. Rebuilding
+
+After changing backend or frontend code:
+
+```powershell
+docker compose up --build
+```
+
+To remove the current containers and recreate them:
+
+```powershell
+docker compose down
+docker compose up --build
+```
+
+Persistent database and Redis volumes should not be removed unless data reset is intentionally required.
+
+## 7. Kubernetes
+
+Kubernetes manifests are stored under:
+
+```text
+k8s/
+```
+
+The base configuration contains:
+
+* Backend
+* Frontend
+* PostgreSQL
+* Redis
+* ConfigMap
+* Secrets
+* Ingress
+* HPA
+* VPA
+* PDB
+
+The repository also contains development and production overlay directories.
+
+Before applying Kubernetes manifests, verify that the target cluster is available:
+
+```powershell
+kubectl cluster-info
+```
+
+Check nodes:
+
+```powershell
+kubectl get nodes
+```
+
+Check workloads:
+
+```powershell
+kubectl get pods -A
+```
+
+Check CivicPulse resources:
+
+```powershell
+kubectl get all -n civicpulse
+```
+
+## 8. HPA
+
+The backend HPA is defined in:
+
+```text
+k8s/base/hpa.yaml
+```
+
+Check HPA status:
+
+```powershell
+kubectl get hpa -n civicpulse
+```
+
+Detailed HPA information:
+
+```powershell
+kubectl describe hpa -n civicpulse
+```
+
+The repository contains load-testing and HPA evidence under:
+
+```text
+load/
+evidence/
+```
+
+## 9. VPA
+
+The backend VPA is defined in:
+
+```text
+k8s/base/vpa.yaml
+```
+
+Check VPA resources:
+
+```powershell
+kubectl get vpa -n civicpulse
+```
+
+Describe the VPA:
+
+```powershell
+kubectl describe vpa -n civicpulse
+```
+
+## 10. Kubernetes Troubleshooting
+
+Check pods:
+
+```powershell
+kubectl get pods -n civicpulse
+```
+
+Describe a failing pod:
+
+```powershell
+kubectl describe pod <pod-name> -n civicpulse
+```
+
+View pod logs:
+
+```powershell
+kubectl logs <pod-name> -n civicpulse
+```
+
+Check recent events:
+
+```powershell
+kubectl get events -n civicpulse --sort-by=.lastTimestamp
+```
+
+Check deployments:
+
+```powershell
+kubectl get deployments -n civicpulse
+```
+
+Check services:
+
+```powershell
+kubectl get svc -n civicpulse
+```
+
+## 11. CI/CD
+
+GitHub Actions workflows are stored in:
+
+```text
+.github/workflows/
+```
+
+CI validates backend and frontend changes.
+
+The container publishing workflow builds and publishes SHA-tagged backend and frontend images to GitHub Container Registry.
+
+The repository also contains Docker Compose deployment automation.
+
+Kubernetes manifests are maintained separately under:
+
+```text
+k8s/
+```
+
+## 12. Observability
+
+CivicPulse provides:
+
+* Structured JSON logs
+* Request IDs
+* Request latency
+* Health checks
+* Readiness checks
+* Metrics
+* Graceful shutdown
+
+When debugging an API request, check the request ID and corresponding backend log entry.
+
+## 13. Common Problems
+
+### Backend does not start
+
+Check:
+
+```powershell
+docker compose logs backend
+```
+
+Verify:
+
+* Database connection configuration
+* Redis connection configuration
+* Required environment variables
+* Alembic migration state
+
+### PostgreSQL is unhealthy
+
+Check:
+
+```powershell
+docker compose logs postgres
+```
+
+Then:
+
+```powershell
+docker compose ps postgres
+```
+
+### Redis is unhealthy
+
+Check:
+
+```powershell
+docker compose logs redis
+```
+
+Then:
+
+```powershell
+docker compose ps redis
+```
+
+### Frontend cannot reach backend
+
+Check the frontend API configuration and verify that the backend is available through:
+
+```text
+http://localhost:8000
+```
+
+Also inspect the browser developer console and backend logs.
+
+### Kubernetes cluster is unavailable
+
+Check:
+
+```powershell
+kubectl cluster-info
+```
+
+Then:
+
+```powershell
+kubectl get nodes
+```
+
+If the Kubernetes control plane is unavailable, fix the cluster before troubleshooting CivicPulse workloads.
+
+## 14. Data Safety
+
+Do not commit:
+
+* API keys
+* Database passwords
+* LLM provider credentials
+* Production secrets
+* Personal/private credentials
+
+Use environment variables or Kubernetes Secrets for sensitive configuration.
+
+Architecture and data-governance decisions are documented under:
+
+```text
+docs/adr/
+```
