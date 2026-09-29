@@ -1,0 +1,286 @@
+```yaml
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  test:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16.9-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: civicpulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d civicpulse"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+      redis:
+        image: redis:7.2.5-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/civicpulse
+      REDIS_URL: redis://localhost:6379/0
+      TRIAGE_PROVIDER: rules
+      GROQ_API_KEY: test-key-not-real
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          python -m pytest
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.18.0'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm test
+
+
+  publish:
+    name: Build and Publish Images
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract release version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/fahadshoaib1068/civicpulse-backend:${{ github.ref_name }}
+            ghcr.io/fahadshoaib1068/civicpulse-backend:${{ steps.version.outputs.version }}
+            ghcr.io/fahadshoaib1068/civicpulse-backend:${{ github.sha }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/fahadshoaib1068/civicpulse-frontend:${{ github.ref_name }}
+            ghcr.io/fahadshoaib1068/civicpulse-frontend:${{ steps.version.outputs.version }}
+            ghcr.io/fahadshoaib1068/civicpulse-frontend:${{ github.sha }}
+
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Generate release notes
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: CivicPulse ${{ github.ref_name }}
+          generate_release_notes: true
+
+
+  deploy:
+    name: Deploy Immutable Release
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DB: civicpulse
+      DATABASE_URL: postgresql+psycopg2://postgres:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/civicpulse
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_PROVIDER: rules
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create immutable Compose override
+        run: |
+          cat > "$RUNNER_TEMP/release-compose.override.yaml" <<EOF
+          services:
+            backend:
+              image: ghcr.io/fahadshoaib1068/civicpulse-backend:${{ github.sha }}
+              build: !reset null
+            frontend:
+              image: ghcr.io/fahadshoaib1068/civicpulse-frontend:${{ github.sha }}
+              build: !reset null
+          EOF
+
+      - name: Validate deployment configuration
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.prod.yaml \
+            -f "$RUNNER_TEMP/release-compose.override.yaml" \
+            config
+
+      - name: Deploy immutable release
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.prod.yaml \
+            -f "$RUNNER_TEMP/release-compose.override.yaml" \
+            up -d --remove-orphans
+
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose \
+              -f compose.yaml \
+              -f compose.prod.yaml \
+              -f "$RUNNER_TEMP/release-compose.override.yaml" \
+              ps --status running --format '{{.Service}} {{.Health}}' |
+              grep -q 'backend healthy' &&
+              docker compose \
+              -f compose.yaml \
+              -f compose.prod.yaml \
+              -f "$RUNNER_TEMP/release-compose.override.yaml" \
+              ps --status running --format '{{.Service}} {{.Health}}' |
+              grep -q 'postgres healthy' &&
+              docker compose \
+              -f compose.yaml \
+              -f compose.prod.yaml \
+              -f "$RUNNER_TEMP/release-compose.override.yaml" \
+              ps --status running --format '{{.Service}} {{.Health}}' |
+              grep -q 'redis healthy'; then
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "Deployment did not become healthy"
+          docker compose \
+            -f compose.yaml \
+            -f compose.prod.yaml \
+            -f "$RUNNER_TEMP/release-compose.override.yaml" \
+            ps
+
+          exit 1
+
+      - name: Verify deployed image references
+        run: |
+          docker inspect \
+            "$(docker compose \
+              -f compose.yaml \
+              -f compose.prod.yaml \
+              -f "$RUNNER_TEMP/release-compose.override.yaml" \
+              ps -q backend)" \
+            --format '{{.Config.Image}}'
+
+          docker inspect \
+            "$(docker compose \
+              -f compose.yaml \
+              -f compose.prod.yaml \
+              -f "$RUNNER_TEMP/release-compose.override.yaml" \
+              ps -q frontend)" \
+            --format '{{.Config.Image}}'
+
+      - name: Smoke test backend
+        run: |
+          docker compose \
+            -f compose.yaml \
+            -f compose.prod.yaml \
+            -f "$RUNNER_TEMP/release-compose.override.yaml" \
+            exec -T backend \
+            python -c "import urllib.request; urllib.request.urlopen('http://backend:8000/ready').read()"
+
+      - name: Smoke test frontend
+        run: |
+          curl -fsS http://localhost:80
+```
