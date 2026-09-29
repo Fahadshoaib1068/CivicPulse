@@ -1,42 +1,16 @@
-apiVersion: v1
-kind: Service
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: backend
+  name: db-migrate
   namespace: civicpulse
 spec:
-  type: ClusterIP
-  selector:
-    app: backend
-  ports:
-    - name: http
-      port: 8000
-      targetPort: 8000
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: backend
-  namespace: civicpulse
-spec:
-  replicas: 2
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  selector:
-    matchLabels:
-      app: backend
+  backoffLimit: 3
   template:
     metadata:
       labels:
-        app: backend
+        app: db-migrate
     spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+      restartPolicy: Never
       initContainers:
         - name: wait-for-postgres
           image: civicpulse-backend:1.0.0
@@ -66,12 +40,13 @@ spec:
             - name: DATABASE_URL
               value: postgresql+psycopg2://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
       containers:
-        - name: backend
+        - name: migrate
           image: civicpulse-backend:1.0.0
           imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8000
-              name: http
+          command:
+            - alembic
+            - upgrade
+            - head
           env:
             - name: POSTGRES_DB
               valueFrom:
@@ -90,45 +65,10 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: DATABASE_URL
               value: postgresql+psycopg2://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
-            - name: REDIS_URL
-              value: redis://redis:6379/0
-            - name: TRIAGE_PROVIDER
-              value: rules
-            - name: GROQ_API_KEY
-              value: ""
-          startupProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            failureThreshold: 30
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 15
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 8000
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          lifecycle:
-            preStop:
-              exec:
-                command:
-                  - /bin/sh
-                  - -c
-                  - sleep 10
           resources:
             requests:
-              cpu: 200m
-              memory: 256Mi
+              cpu: 100m
+              memory: 128Mi
             limits:
-              cpu: 500m
-              memory: 512Mi
+              cpu: 300m
+              memory: 256Mi

@@ -18,14 +18,11 @@ COPY entrypoint.sh /docker-entrypoint.d/30-config.sh
 RUN sed -i 's/\r$//' /docker-entrypoint.d/30-config.sh \
     && sed -i 's/^[[:space:]]*pid[[:space:]].*;/pid \/tmp\/nginx.pid;/' /etc/nginx/nginx.conf \
     && chmod +x /docker-entrypoint.d/30-config.sh \
-    && mkdir -p /var/cache/nginx /var/run /var/log/nginx \
-    && chown -R nginx:nginx /var/cache/nginx /var/run /var/log/nginx /usr/share/nginx/html /docker-entrypoint.d \
+    && mkdir -p /var/cache/nginx /var/run /var/log/nginx /usr/share/nginx/html \
     && touch /usr/share/nginx/html/config.js \
-    && chown nginx:nginx /usr/share/nginx/html/config.js \
     && chmod 644 /usr/share/nginx/html/config.js \
+    && chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/run /var/log/nginx /docker-entrypoint.d \
     && chmod 755 /var/cache/nginx /var/run /var/log/nginx /usr/share/nginx/html /docker-entrypoint.d
-
-USER nginx
 
 EXPOSE 80
 
