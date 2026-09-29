@@ -106,16 +106,25 @@ jobs:
       TRIAGE_PROVIDER: rules
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:8000' }}
+      COMPOSE_FILE: compose.yaml:compose.prod.yaml:${{ runner.temp }}/cd-compose.override.yaml
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Configure CD Compose override
+        run: |
+          cat > "$RUNNER_TEMP/cd-compose.override.yaml" <<'EOF'
+          services:
+            backend:
+              ports: !reset []
+          EOF
+
       - name: Validate Docker Compose configuration
-        run: docker compose -f compose.yaml -f compose.prod.yaml config
+        run: docker compose config
 
       - name: Build and deploy stack
-        run: docker compose -f compose.yaml -f compose.prod.yaml up -d --build --remove-orphans
+        run: docker compose up -d --build --remove-orphans
 
       - name: Wait for stack health
         run: |
@@ -132,7 +141,7 @@ jobs:
           exit 1
 
       - name: Smoke test backend
-        run: curl -fsS http://localhost:8000/ready
+        run: docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://backend:8000/ready').read()"
 
       - name: Smoke test frontend
         run: curl -fsS http://localhost:5173
