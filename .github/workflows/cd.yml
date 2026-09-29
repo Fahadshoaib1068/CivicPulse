@@ -106,7 +106,6 @@ jobs:
       TRIAGE_PROVIDER: rules
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:8000' }}
-      COMPOSE_FILE: compose.yaml:compose.prod.yaml:${{ runner.temp }}/cd-compose.override.yaml
 
     steps:
       - name: Check out repository
@@ -121,27 +120,27 @@ jobs:
           EOF
 
       - name: Validate Docker Compose configuration
-        run: docker compose config
+        run: docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" config
 
       - name: Build and deploy stack
-        run: docker compose up -d --build --remove-orphans
+        run: docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" up -d --build --remove-orphans
 
       - name: Wait for stack health
         run: |
           for i in $(seq 1 30); do
-            if docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'backend healthy' && \
-               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'postgres healthy' && \
-               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'redis healthy'; then
+            if docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'backend healthy' && \
+               docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'postgres healthy' && \
+               docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'redis healthy'; then
               exit 0
             fi
             sleep 5
           done
           echo "Deployment stack did not become healthy in time"
-          docker compose ps
+          docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" ps
           exit 1
 
       - name: Smoke test backend
-        run: docker compose exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://backend:8000/ready').read()"
+        run: docker compose -f compose.yaml -f compose.prod.yaml -f "$RUNNER_TEMP/cd-compose.override.yaml" exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://backend:8000/ready').read()"
 
       - name: Smoke test frontend
         run: curl -fsS http://localhost:5173
