@@ -1,0 +1,120 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run backend tests
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e backend
+          python -m pytest backend/tests
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run frontend tests
+        run: |
+          npm ci --prefix frontend
+          npm test --prefix frontend -- --run
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}-backend:${{ github.sha }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}-frontend:${{ github.sha }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      POSTGRES_DB: civicpulse
+      DATABASE_URL: postgresql+psycopg2://postgres:${{ secrets.POSTGRES_PASSWORD }}@postgres:5432/civicpulse
+      REDIS_URL: redis://redis:6379/0
+      TRIAGE_PROVIDER: rules
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'http://localhost:8000' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose configuration
+        run: docker compose -f compose.yaml -f compose.prod.yaml config
+
+      - name: Build and deploy stack
+        run: docker compose -f compose.yaml -f compose.prod.yaml up -d --build --remove-orphans
+
+      - name: Wait for stack health
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'backend healthy' && \
+               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'postgres healthy' && \
+               docker compose ps --status running --format '{{.Service}} {{.Health}}' | grep -q 'redis healthy'; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Deployment stack did not become healthy in time"
+          docker compose ps
+          exit 1
+
+      - name: Smoke test backend
+        run: curl -fsS http://localhost:8000/ready
+
+      - name: Smoke test frontend
+        run: curl -fsS http://localhost:5173
